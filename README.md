@@ -15,55 +15,48 @@ This Terraform infrastructure project deploys a **secure, production-ready Azure
 ```mermaid
 graph TB
     Internet([Internet]) --> AGW[Application Gateway + WAF]
-    AGW --> PE_WEB[Private Endpoint]
-    PE_WEB --> WebApp[Azure Web App]
-    
+    AGW -->|/ (Web)| PE_WEB[PE -> WebApp]
+    AGW -->|/api/*| APIM[APIM (Internal)]
+
     subgraph "Virtual Network (10.10.0.0/16)"
-        subgraph "AGW Subnet (10.10.0.0/24)"
+        subgraph "AGW (10.10.0.0/24)"
             AGW
         end
-        
-        subgraph "Private Link Subnet (10.10.1.0/24)"
+        subgraph "Private Link (10.10.1.0/24)"
             PE_WEB
             PE_STORAGE[Storage PE]
             PE_KV[Key Vault PE]
-            PE_COSMOS[Cosmos DB PE]
-            PE_SEARCH[AI Search PE]
+            PE_COSMOS[Cosmos PE]
+            PE_SEARCH[Search PE]
             PE_AI[AI Services PE]
-            PE_FOUNDRY[AI Foundry PE]
+            PE_FOUNDRY[Foundry PE]
         end
-        
-        subgraph "Apps Subnet (10.10.2.0/24)"
-            WebApp
+        subgraph "Apps (10.10.2.0/24)"
+            WebApp[Azure Web App]
         end
-        
-        subgraph "Firewall Subnet (10.10.3.0/24)"
+        subgraph "Firewall (10.10.3.0/24)"
             AFW[Azure Firewall]
         end
-        
-        subgraph "Agent Subnet (10.10.4.0/24)"
-            Agents[AI Agents/Workloads]
+        subgraph "Agents (10.10.4.0/24)"
+            Agents[AI Agents / Jobs]
+        end
+        subgraph "APIM (10.10.5.0/24)"
+            APIM
+        end
+        subgraph "Bastion (10.10.6.0/26)"
+            Bastion[Bastion]
+        end
+        subgraph "JumpBox (10.10.6.64/27)"
+            JumpBox
         end
     end
-    
-    subgraph "AI Services"
-        FOUNDRY[Azure AI Foundry Hub]
-        PROJECT[AI Foundry Project]
-        AISVC[Azure AI Services]
-        SEARCH[Azure AI Search]
-    end
-    
-    subgraph "Data & Storage"
-        STORAGE[Azure Storage Account]
-        COSMOS[Azure Cosmos DB]
-        KV[Azure Key Vault]
-    end
-    
-    subgraph "Monitoring"
-        LAW[Log Analytics Workspace]
-        APPINSIGHTS[Application Insights]
-    end
 ```
+
+### Updated Traffic Flow
+1. Client -> Application Gateway (WAF). HTTP fase inicial (sin cert) / HTTPS fase 2 (con `deploy_certificate=true`).
+2. Path-based routing: `/api/*` -> APIM interno; resto -> WebApp.
+3. APIM consume OpenAI y demás servicios vía Private Endpoints.
+4. Operaciones internas: Bastion -> JumpBox (o VPN P2S opcional) para pruebas (`curl` a gateway interno de APIM).
 
 ## 🔧 Key Components
 
@@ -157,6 +150,11 @@ terraform apply
 | `app_service_plan_sku` | string | `P1v3` | App Service Plan SKU |
 | `address_space` | list(string) | `["10.10.0.0/16"]` | VNet address space |
 | `subnet_prefixes` | object | See below | Subnet CIDR blocks |
+| `enable_bastion` | bool | `true` | Deploy Azure Bastion host |
+| `enable_jumpbox` | bool | `true` | Deploy JumpBox VM |
+| `enable_vpn_gateway` | bool | `false` | Deploy VPN Gateway (P2S) |
+| `jumpbox_ssh_public_key` | string | `""` | Existing SSH public key (auto-generate if empty) |
+| `deploy_certificate` | bool | `false` | Enable SSL cert on Application Gateway (phase 2) |
 
 ### Subnet Configuration
 ```hcl
@@ -166,6 +164,10 @@ subnet_prefixes = {
   apps        = "10.10.2.0/24"   # App Service Integration
   firewall    = "10.10.3.0/24"   # Azure Firewall
   agent       = "10.10.4.0/24"   # AI Agents/Workloads
+    apim        = "10.10.5.0/24"   # API Management (Internal)
+    bastion     = "10.10.6.0/26"   # Bastion
+    jumpbox     = "10.10.6.64/27"  # JumpBox
+    gateway     = "10.10.7.0/27"   # VPN Gateway
 }
 ```
 
@@ -194,6 +196,12 @@ The module provides essential information about deployed resources:
 | `ai_services_name` | AI Services account name |
 | `ai_foundry_name` | AI Foundry Hub name |
 | `ai_foundry_project_name` | AI Foundry Project name |
+| `apim_name` | API Management service name |
+| `apim_internal_gateway_url` | Internal APIM gateway URL |
+| `bastion_public_ip` | Bastion public IP (if enabled) |
+| `bastion_fqdn` | Bastion FQDN (if enabled) |
+| `jumpbox_private_ip` | JumpBox private IP (if enabled) |
+| `vpn_gateway_public_ip` | VPN Gateway public IP (if enabled) |
 
 ## 🔐 Security Features
 
@@ -255,6 +263,63 @@ To add additional Azure services:
 - Update `subnet_prefixes` variable for different CIDR ranges
 - Modify `address_space` for larger or smaller VNets
 - Adjust firewall rules in Azure Firewall resource
+
+
+## 🔒 Advanced Network Security
+
+Key enforced principles:
+
+1. Zero Public APIM Exposure: APIM is Internal-only. Ingress flows exclusively through the Application Gateway using path-based routing (`/api/*`).
+2. Least Privilege Egress: APIM NSG outbound rule targets only the Cognitive Services private endpoint IP for OpenAI calls plus essential Azure service tags (AAD, Monitor, KV, Storage, etc.).
+3. Segmented Ops Access: Bastion + JumpBox subnets isolate operational sessions; no direct SSH from Internet.
+4. Private DNS Resolution: All service FQDNs (OpenAI, Storage, Key Vault, WebApp, Redis) resolve to private RFC1918 addresses inside the VNet.
+5. Future Hardening (optional): Add Azure Firewall DNAT for restricted outbound, Web Application Firewall custom rules, APIM JWT validation & rate limiting policies.
+
+Example NSG pattern restricting APIM to a single private endpoint IP:
+```hcl
+security_rule {
+    name                       = "AllowOpenAI"
+    priority                   = 100
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = "*"
+    destination_address_prefix = azurerm_private_endpoint.pe_cognitive.private_service_connection[0].private_ip_address
+}
+```
+
+See `azurerm_network_security_group.apim_nsg` in `01-networking.tf`.
+
+## 🧠 APIM + Redis Semantic Caching
+
+This baseline includes integration between Azure API Management (APIM) and Azure Redis Cache for semantic caching of Azure OpenAI responses:
+
+- **Redis Cache** is deployed in a private subnet with public access disabled, TLS 1.2 enforced, and data persistence enabled.
+- **APIM** uses Managed Identity and Private Endpoint to securely access Redis.
+- **Caching Logic:** APIM policies store and retrieve OpenAI responses in Redis, reducing latency and cost for repeated queries.
+- **Example APIM Policy:**
+    ```xml
+    <inbound>
+        <cache-lookup-value key="@(context.Request.Body.As<string>())" />
+        <choose>
+            <when condition="@(context.Cache.LookupValue != null)">
+                <return-response>
+                    <set-body>@(context.Cache.LookupValue)</set-body>
+                </return-response>
+            </when>
+        </choose>
+    </inbound>
+    <backend>
+        <!-- Call Azure OpenAI backend -->
+    </backend>
+    <outbound>
+        <cache-store-value key="@(context.Request.Body.As<string>())" value="@(context.Response.Body.As<string>())" duration="300" />
+    </outbound>
+    ```
+
+This ensures that repeated semantic queries to OpenAI are served from Redis, improving performance and reducing costs. All access is isolated to the VNET and managed identities. External clients never call APIM directly; they reach it through the WAF (`/api/*` path) maintaining a single hardened ingress surface.
 
 ## 🤝 Contributing
 
