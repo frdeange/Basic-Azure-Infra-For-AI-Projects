@@ -30,16 +30,21 @@ resource "azurerm_key_vault" "main" {
   }
 }
 
-# SSL certificate for Application Gateway (optional initial deploy)
+# SSL certificate strategy (single-phase):
+# If an external PFX (base64) is provided, import it via azurerm_key_vault_certificate using the "Import" action.
+# Otherwise, create a self-signed certificate so HTTPS is available on first apply.
+locals {
+  use_imported_pfx = length(trimspace(var.pfx_base64)) > 0
+}
+
 resource "azurerm_key_vault_certificate" "ssl" {
-  count        = var.deploy_certificate ? 1 : 0
   name         = "agw-ssl-cert"
   key_vault_id = azurerm_key_vault.main.id
   depends_on   = [azurerm_key_vault_access_policy.current_user]
 
   certificate_policy {
     issuer_parameters {
-      name = "Self"
+      name = local.use_imported_pfx ? "Unknown" : "Self"
     }
     key_properties {
       exportable = true
@@ -56,6 +61,15 @@ resource "azurerm_key_vault_certificate" "ssl" {
       key_usage          = ["digitalSignature", "keyEncipherment"]
     }
   }
+
+  # Import action only when external PFX provided
+  dynamic "certificate" {
+    for_each = local.use_imported_pfx ? [1] : []
+    content {
+      contents = var.pfx_base64
+      password = var.pfx_password
+    }
+  }
 }
 
 resource "azurerm_key_vault_access_policy" "current_user" {
@@ -66,4 +80,24 @@ resource "azurerm_key_vault_access_policy" "current_user" {
   key_permissions         = ["Create", "Get", "Delete", "Purge", "GetRotationPolicy"]
   secret_permissions      = ["Get", "List", "Set", "Delete", "Purge"]
   certificate_permissions = ["Get", "List", "Create", "Delete", "Purge", "Import", "Update", "ManageContacts", "ManageIssuers", "SetIssuers", "DeleteIssuers", "Get"]
+}
+
+# Access policy for Application Gateway managed identity to retrieve certificate secret
+resource "azurerm_key_vault_access_policy" "agw" {
+  key_vault_id = azurerm_key_vault.main.id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = azurerm_application_gateway.main.identity[0].principal_id
+
+  secret_permissions      = ["Get", "List"]
+  certificate_permissions = ["Get", "List"]
+}
+
+# Small wait to reduce risk of eventual consistency issues before AGW reads secret
+resource "null_resource" "wait_for_kv_certificate" {
+  triggers = {
+    cert_version = azurerm_key_vault_certificate.ssl.version
+  }
+  provisioner "local-exec" {
+    command = "sleep 30"
+  }
 }

@@ -5,10 +5,20 @@ variable "kv_public_access" {
   description = "Enable or disable public access to Key Vault."
 }
 
-variable "deploy_certificate" {
-  type        = bool
-  default     = false
-  description = "Whether to deploy the Application Gateway SSL certificate in Key Vault on initial build."
+
+# Optional external PFX certificate (base64-encoded) for single-phase HTTPS deployment.
+# If provided, it will be imported into Key Vault instead of generating a self-signed certificate.
+variable "pfx_base64" {
+  type        = string
+  default     = ""
+  description = "Base64-encoded PFX certificate to import into Key Vault (leave empty to auto-generate self-signed)."
+}
+
+variable "pfx_password" {
+  type        = string
+  default     = ""
+  description = "Password for the provided PFX (ignored if pfx_base64 empty)."
+  sensitive   = true
 }
 
 # Controls whether purge protection is enabled on Key Vault (default disabled to allow immediate re-creation in test environments)

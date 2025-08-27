@@ -56,11 +56,12 @@ flowchart TB
     AGW -.->|other paths| WEB
 ```
 
-### Updated Traffic Flow
-1. Client -> Application Gateway (WAF). HTTP in phase 1 (no cert) / HTTPS in phase 2 (`deploy_certificate=true`).
-2. Path-based routing: `/api/*` -> internal APIM; all other paths -> Web App.
-3. APIM consumes OpenAI and other services via Private Endpoints only.
-4. Operational access: Bastion -> JumpBox (or optional P2S VPN) for internal tests (e.g. curl to internal APIM gateway).
+### Updated Traffic Flow (Single-Phase HTTPS)
+1. Client -> Application Gateway (WAF) over HTTPS (certificate provisioned in same apply).
+2. HTTP (port 80) exists only to permanently redirect to HTTPS.
+3. Path-based routing: `/api/*` -> internal APIM; all other paths -> Web App.
+4. APIM consumes OpenAI and other services via Private Endpoints only.
+5. Operational access: Bastion -> JumpBox (or optional P2S VPN) for internal tests (e.g. curl to internal APIM gateway).
 
 ## 🔧 Key Components
 
@@ -158,7 +159,8 @@ terraform apply
 | `enable_jumpbox` | bool | `true` | Deploy JumpBox VM |
 | `enable_vpn_gateway` | bool | `false` | Deploy VPN Gateway (P2S) |
 | `jumpbox_ssh_public_key` | string | `""` | Existing SSH public key (auto-generate if empty) |
-| `deploy_certificate` | bool | `false` | Enable SSL cert on Application Gateway (phase 2) |
+| `pfx_base64` | string | `""` | Base64 PFX to import (leave empty to auto-generate self-signed) |
+| `pfx_password` | string | `""` | Password for provided PFX (ignored if empty) |
 
 ### Subnet Configuration
 ```hcl
@@ -175,12 +177,23 @@ subnet_prefixes = {
 }
 ```
 
-### Example terraform.tfvars
+### Example terraform.tfvars (Self-Signed Default)
 ```hcl
 location            = "eastus"
 resource_group_name = "my-ai-project-rg"
 ai_prefix          = "myaiproj"
 app_service_plan_sku = "P2v3"
+pfx_base64          = "" # self-signed auto-created
+```
+
+### Example terraform.tfvars (Import Existing Certificate)
+```hcl
+location              = "eastus"
+resource_group_name   = "my-ai-project-rg"
+ai_prefix             = "myaiproj"
+app_service_plan_sku  = "P2v3"
+pfx_base64            = filebase64("certs/mycert.pfx")
+pfx_password          = var.pfx_password
 ```
 
 ## 📤 Outputs
@@ -274,10 +287,11 @@ To add additional Azure services:
 Key enforced principles:
 
 1. Zero Public APIM Exposure: APIM is Internal-only. Ingress flows exclusively through the Application Gateway using path-based routing (`/api/*`).
-2. Least Privilege Egress: APIM NSG outbound rule targets only the Cognitive Services private endpoint IP for OpenAI calls plus essential Azure service tags (AAD, Monitor, KV, Storage, etc.).
-3. Segmented Ops Access: Bastion + JumpBox subnets isolate operational sessions; no direct SSH from Internet.
-4. Private DNS Resolution: All service FQDNs (OpenAI, Storage, Key Vault, WebApp, Redis) resolve to private RFC1918 addresses inside the VNet.
-5. Future Hardening (optional): Add Azure Firewall DNAT for restricted outbound, Web Application Firewall custom rules, APIM JWT validation & rate limiting policies.
+2. Single-Phase TLS: Certificate (self-signed or imported PFX) is available in the same Terraform apply; HTTP → HTTPS redirect enforced.
+3. Least Privilege Egress: APIM NSG outbound rule targets only the Cognitive Services private endpoint IP for OpenAI calls plus essential Azure service tags (AAD, Monitor, KV, Storage, etc.).
+4. Segmented Ops Access: Bastion + JumpBox subnets isolate operational sessions; no direct SSH from Internet.
+5. Private DNS Resolution: All service FQDNs (OpenAI, Storage, Key Vault, WebApp, Redis) resolve to private RFC1918 addresses inside the VNet.
+6. Future Hardening (optional): Add Azure Firewall DNAT for restricted outbound, WAF custom rules, APIM JWT validation & rate limiting policies, Key Vault RBAC-only model.
 
 Example NSG pattern restricting APIM to a single private endpoint IP:
 ```hcl

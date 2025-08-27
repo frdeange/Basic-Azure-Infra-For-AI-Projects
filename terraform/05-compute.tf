@@ -70,6 +70,11 @@ resource "azurerm_application_gateway" "main" {
   name                = "${var.ai_prefix}-agw"
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
+  depends_on          = [null_resource.wait_for_kv_certificate]
+
+  identity {
+    type = "SystemAssigned"
+  }
 
   sku {
     name     = "WAF_v2"
@@ -86,13 +91,10 @@ resource "azurerm_application_gateway" "main" {
     name = "https"
     port = 443
   }
-  # Add HTTP port only for initial phase (no certificate) to allow health validation and later redirect removal
-  dynamic "frontend_port" {
-    for_each = var.deploy_certificate ? [] : [1]
-    content {
-      name = "http"
-      port = 80
-    }
+  # Optional HTTP port kept to redirect to HTTPS
+  frontend_port {
+    name = "http"
+    port = 80
   }
 
   frontend_ip_configuration {
@@ -100,13 +102,10 @@ resource "azurerm_application_gateway" "main" {
     public_ip_address_id = azurerm_public_ip.agw.id
   }
 
-  # Only attach Key Vault sourced SSL certificate in phase 2 when deploy_certificate = true
-  dynamic "ssl_certificate" {
-    for_each = var.deploy_certificate ? [1] : []
-    content {
-      name                = "ssl-cert"
-      key_vault_secret_id = azurerm_key_vault_certificate.ssl[0].secret_id
-    }
+  # Always attach SSL certificate from Key Vault (single-phase strategy)
+  ssl_certificate {
+    name                = "ssl-cert"
+    key_vault_secret_id = azurerm_key_vault_certificate.ssl.secret_id
   }
 
   backend_address_pool {
@@ -172,49 +171,46 @@ resource "azurerm_application_gateway" "main" {
 
   # ...existing code...
 
-  # HTTPS listener and rule only when certificate deployed
-  dynamic "http_listener" {
-    for_each = var.deploy_certificate ? [1] : []
-    content {
-      name                           = "listener-https"
-      frontend_ip_configuration_name = "public"
-      frontend_port_name             = "https"
-      protocol                       = "Https"
-      ssl_certificate_name           = "ssl-cert"
-    }
+  # HTTPS listener (primary)
+  http_listener {
+    name                           = "listener-https"
+    frontend_ip_configuration_name = "public"
+    frontend_port_name             = "https"
+    protocol                       = "Https"
+    ssl_certificate_name           = "ssl-cert"
   }
 
-  dynamic "request_routing_rule" {
-    for_each = var.deploy_certificate ? [1] : []
-    content {
-  name                = "rule-https"
-  rule_type           = "PathBasedRouting"
-  http_listener_name  = "listener-https"
-  url_path_map_name   = "apim-pathmap"
-  priority            = 100
-    }
+  # Path-based routing rule (HTTPS)
+  request_routing_rule {
+    name               = "rule-https"
+    rule_type          = "PathBasedRouting"
+    http_listener_name = "listener-https"
+    url_path_map_name  = "apim-pathmap"
+    priority           = 100
   }
 
-  # HTTP listener and rule for initial phase without certificate (can later be replaced or redirected)
-  dynamic "http_listener" {
-    for_each = var.deploy_certificate ? [] : [1]
-    content {
-      name                           = "listener-http"
-      frontend_ip_configuration_name = "public"
-      frontend_port_name             = "http"
-      protocol                       = "Http"
-    }
+  # HTTP listener only to redirect all traffic to HTTPS
+  http_listener {
+    name                           = "listener-http"
+    frontend_ip_configuration_name = "public"
+    frontend_port_name             = "http"
+    protocol                       = "Http"
   }
 
-  dynamic "request_routing_rule" {
-    for_each = var.deploy_certificate ? [] : [1]
-    content {
-  name               = "rule-http"
-  rule_type          = "PathBasedRouting"
-  http_listener_name = "listener-http"
-  url_path_map_name  = "apim-pathmap"
-  priority           = 110
-    }
+  redirect_configuration {
+    name                 = "http-to-https"
+    redirect_type        = "Permanent"
+    target_listener_name = "listener-https"
+    include_path         = true
+    include_query_string = true
+  }
+
+  request_routing_rule {
+    name               = "rule-http-redirect"
+    rule_type          = "Basic"
+    http_listener_name = "listener-http"
+    redirect_configuration_name = "http-to-https"
+    priority           = 90
   }
 
   firewall_policy_id = azurerm_web_application_firewall_policy.waf.id
