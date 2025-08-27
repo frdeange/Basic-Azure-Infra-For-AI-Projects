@@ -14,15 +14,15 @@ This Terraform infrastructure project deploys a **secure, production-ready Azure
 
 ```mermaid
 flowchart TB
-    Internet[[Internet]] --> AGW[Application Gateway / WAF]
+    Internet[[Internet]] --> AGW[Application Gateway/WAF]
     AGW --> WEB[Web App]
-    AGW --> APIM[API Management (Internal)]
+    AGW --> APIM[API Management]
 
-    subgraph VNET[Virtual Network 10.10.0.0/16]
-        subgraph S1[App Gateway 10.10.0.0/24]
+    subgraph VNET [Virtual Network 10.10.0.0/16]
+        subgraph S1 [App Gateway 10.10.0.0/24]
             AGW
         end
-        subgraph S2[Private Link 10.10.1.0/24]
+        subgraph S2 [Private Link 10.10.1.0/24]
             PE1[(PE Web)]
             PE2[(PE Storage)]
             PE3[(PE KeyVault)]
@@ -31,29 +31,29 @@ flowchart TB
             PE6[(PE AI Services)]
             PE7[(PE Foundry)]
         end
-        subgraph S3[Apps 10.10.2.0/24]
+        subgraph S3 [Apps 10.10.2.0/24]
             WEB
         end
-        subgraph S4[Firewall 10.10.3.0/24]
+        subgraph S4 [Firewall 10.10.3.0/24]
             FW[Azure Firewall]
         end
-        subgraph S5[Agents 10.10.4.0/24]
-            AGENTS[AI Agents / Jobs]
+        subgraph S5 [Agents 10.10.4.0/24]
+            AGENTS[AI Agents/Jobs]
         end
-        subgraph S6[APIM 10.10.5.0/24]
+        subgraph S6 [APIM 10.10.5.0/24]
             APIM
         end
-        subgraph S7[Bastion 10.10.6.0/26]
+        subgraph S7 [Bastion 10.10.6.0/26]
             BASTION[Bastion]
         end
-        subgraph S8[JumpBox 10.10.6.64/27]
+        subgraph S8 [JumpBox 10.10.6.64/27]
             JUMP[JumpBox]
         end
     end
 
-    %% Routing legend
-    AGW -. path /api/* .-> APIM
-    AGW -. other paths .-> WEB
+    %% Routing
+    AGW -.->|/api/*| APIM
+    AGW -.->|other paths| WEB
 ```
 
 ### Updated Traffic Flow
