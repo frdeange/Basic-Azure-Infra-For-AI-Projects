@@ -13,50 +13,54 @@ This Terraform infrastructure project deploys a **secure, production-ready Azure
 ### High-Level Architecture Diagram
 
 ```mermaid
-graph TB
-    Internet([Internet]) --> AGW[Application Gateway + WAF]
-    AGW -->|/ (Web)| PE_WEB[PE -> WebApp]
-    AGW -->|/api/*| APIM[APIM (Internal)]
+flowchart TB
+    Internet[[Internet]] --> AGW[Application Gateway / WAF]
+    AGW --> WEB[Web App]
+    AGW --> APIM[API Management (Internal)]
 
-    subgraph "Virtual Network (10.10.0.0/16)"
-        subgraph "AGW (10.10.0.0/24)"
+    subgraph VNET[Virtual Network 10.10.0.0/16]
+        subgraph S1[App Gateway 10.10.0.0/24]
             AGW
         end
-        subgraph "Private Link (10.10.1.0/24)"
-            PE_WEB
-            PE_STORAGE[Storage PE]
-            PE_KV[Key Vault PE]
-            PE_COSMOS[Cosmos PE]
-            PE_SEARCH[Search PE]
-            PE_AI[AI Services PE]
-            PE_FOUNDRY[Foundry PE]
+        subgraph S2[Private Link 10.10.1.0/24]
+            PE1[(PE Web)]
+            PE2[(PE Storage)]
+            PE3[(PE KeyVault)]
+            PE4[(PE Cosmos)]
+            PE5[(PE Search)]
+            PE6[(PE AI Services)]
+            PE7[(PE Foundry)]
         end
-        subgraph "Apps (10.10.2.0/24)"
-            WebApp[Azure Web App]
+        subgraph S3[Apps 10.10.2.0/24]
+            WEB
         end
-        subgraph "Firewall (10.10.3.0/24)"
-            AFW[Azure Firewall]
+        subgraph S4[Firewall 10.10.3.0/24]
+            FW[Azure Firewall]
         end
-        subgraph "Agents (10.10.4.0/24)"
-            Agents[AI Agents / Jobs]
+        subgraph S5[Agents 10.10.4.0/24]
+            AGENTS[AI Agents / Jobs]
         end
-        subgraph "APIM (10.10.5.0/24)"
+        subgraph S6[APIM 10.10.5.0/24]
             APIM
         end
-        subgraph "Bastion (10.10.6.0/26)"
-            Bastion[Bastion]
+        subgraph S7[Bastion 10.10.6.0/26]
+            BASTION[Bastion]
         end
-        subgraph "JumpBox (10.10.6.64/27)"
-            JumpBox
+        subgraph S8[JumpBox 10.10.6.64/27]
+            JUMP[JumpBox]
         end
     end
+
+    %% Routing legend
+    AGW -. path /api/* .-> APIM
+    AGW -. other paths .-> WEB
 ```
 
 ### Updated Traffic Flow
-1. Client -> Application Gateway (WAF). HTTP fase inicial (sin cert) / HTTPS fase 2 (con `deploy_certificate=true`).
-2. Path-based routing: `/api/*` -> APIM interno; resto -> WebApp.
-3. APIM consume OpenAI y demás servicios vía Private Endpoints.
-4. Operaciones internas: Bastion -> JumpBox (o VPN P2S opcional) para pruebas (`curl` a gateway interno de APIM).
+1. Client -> Application Gateway (WAF). HTTP in phase 1 (no cert) / HTTPS in phase 2 (`deploy_certificate=true`).
+2. Path-based routing: `/api/*` -> internal APIM; all other paths -> Web App.
+3. APIM consumes OpenAI and other services via Private Endpoints only.
+4. Operational access: Bastion -> JumpBox (or optional P2S VPN) for internal tests (e.g. curl to internal APIM gateway).
 
 ## 🔧 Key Components
 
