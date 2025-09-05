@@ -139,6 +139,37 @@ terraform plan
 terraform apply
 ```
 
+## 🧪 One-Command Deployment Wrapper
+
+Para simplificar el ciclo bootstrap (KV abierto) + hardening (KV cerrado) existe el script `deploy.sh` en la raíz.
+
+Acciones internas:
+1. Aplica Terraform con `kv_hardening_enabled=false` (Key Vault accesible) para generar/importar el certificado `agw-ssl-cert`.
+2. Hace polling hasta que el certificado esté disponible (timeout configurable, defecto 900s).
+3. Vuelve a aplicar Terraform con `kv_hardening_enabled=true` cerrando acceso público y removiendo bypass.
+
+Uso mínimo:
+```bash
+./deploy.sh --auto-approve
+```
+
+Flags relevantes:
+- `--var-file custom.tfvars` Usa un archivo de variables adicional.
+- `--max-wait 900` Ajusta timeout espera certificado.
+- `--recreate-cert` Fuerza recreación del certificado (taint) antes del ciclo.
+- `--skip-hardening` Solo bootstrap (debug).
+- `--plan-only` Ejecuta plan(es) sin aplicar.
+- `--reinit` Forzar `terraform init -upgrade`.
+- `--no-color` / `--debug` Control salida.
+
+Comportamiento inteligente:
+- Si el KV ya está cerrado y el certificado existe: salta fases y muestra outputs.
+- Si el certificado existe pero KV abierto: realiza hardening directo.
+- Si el certificado no aparece antes del timeout aborta (no fuerza cierre por defecto).
+
+Requisitos locales: `terraform`, `az` (sesión activa), `jq`.
+
+
 ## ⚙️ Configuration
 
 ### Input Variables
@@ -338,6 +369,104 @@ This baseline includes integration between Azure API Management (APIM) and Azure
     ```
 
 This ensures that repeated semantic queries to OpenAI are served from Redis, improving performance and reducing costs. All access is isolated to the VNET and managed identities. External clients never call APIM directly; they reach it through the WAF (`/api/*` path) maintaining a single hardened ingress surface.
+
+## 🔐 Point-to-Site VPN Access (Optional)
+
+This baseline supports secure operator connectivity via a Point-to-Site (P2S) VPN Gateway with two mutually exclusive authentication models:
+
+1. Azure AD (Entra ID) Authentication (Recommended)
+2. Root Certificate Authentication (Legacy / Transitional)
+
+### Modes
+
+| Mode | Protocols | Token Distribution | Operational Overhead | Notes |
+|------|-----------|--------------------|----------------------|-------|
+| Azure AD | OpenVPN only | AAD sign-in (interactive) | Low | No certificate distribution; requires app registrations & consent |
+| Root Certificate | OpenVPN / IKEv2 | Exported client certs | Medium | Must manage cert lifecycle and revocation |
+
+### Enabling the VPN Gateway
+
+Set the following flag (adds cost and provisioning time ~30+ minutes):
+
+```
+-var "enable_vpn_gateway=true"
+```
+
+### Azure AD Authentication Flow
+
+When `vpn_enable_aad=true` the VPN gateway is configured for OpenVPN + Azure AD. You can either:
+
+Option A (automated): Terraform creates the required AAD applications (server + public client) and their service principals.
+```
+-var "enable_vpn_gateway=true" \
+-var "vpn_enable_aad=true" \
+-var "create_vpn_aad_apps=true"
+```
+Option B (bring your own apps): Provide existing application IDs and (optionally) an explicit audience:
+```
+-var "enable_vpn_gateway=true" \
+-var "vpn_enable_aad=true" \
+-var "create_vpn_aad_apps=false" \
+-var "vpn_aad_server_app_id=<server-app-client-id>" \
+-var "vpn_aad_client_app_id=<client-app-client-id>" \
+-var "vpn_aad_audience=<audience-guid-or-app-id>"
+```
+If `vpn_aad_audience` is empty Terraform uses the server app ID.
+
+### Key Variables
+
+| Variable | Purpose |
+|----------|---------|
+| enable_vpn_gateway | Deploys the P2S Virtual Network Gateway |
+| vpn_enable_aad | Enables Azure AD auth (disables root cert usage) |
+| create_vpn_aad_apps | Auto-create server & client AAD applications |
+| vpn_aad_scope_name | OAuth2 permission scope exposed by server app |
+| vpn_aad_server_app_display_name | Display name for server application |
+| vpn_aad_client_app_display_name | Display name for client (public) application |
+| vpn_aad_server_app_id | Existing server app ID when not auto-creating |
+| vpn_aad_client_app_id | Existing client app ID when not auto-creating |
+| vpn_aad_audience | Explicit audience (defaults to server app ID) |
+| vpn_p2s_address_space | CIDR assigned to VPN clients (non-overlapping) |
+
+### Validation Rules
+
+Terraform enforces:
+* `vpn_enable_aad=true` requires `enable_vpn_gateway=true`.
+* AAD auth cannot be combined with `vpn_root_cert_data` (root cert mode).
+* When not creating apps, you must supply at least `vpn_aad_server_app_id` or `vpn_aad_audience`.
+
+### Admin Consent
+
+An Azure AD Global Admin (or delegated privileged role) must grant admin consent for the server application's scope before end-users connect. After apply (automated mode), navigate to:
+Azure Portal > Azure Active Directory > App registrations > (server app) > API permissions > Grant admin consent.
+
+### Client Connection Steps (Azure AD Mode)
+1. Download the VPN client profile from the Virtual Network Gateway (Azure Portal) after provisioning completes.
+2. Import into Azure VPN Client (Windows/macOS) or use OpenVPN client supporting Azure AD.
+3. On first connect, interactive browser sign-in occurs; token audience must match the configured server app ID.
+
+### Root Certificate Mode (Alternative)
+Provide a base64-encoded root public certificate via `vpn_root_cert_data`. Clients require individually issued certs signed by that root. Not recommended unless AAD sign-in is infeasible.
+
+### Outputs
+Relevant outputs when AAD mode is enabled:
+* `vpn_gateway_public_ip`
+* `vpn_aad_server_app_id`
+* `vpn_aad_client_app_id`
+* `vpn_aad_audience_effective`
+
+### Security Notes
+* Only OpenVPN protocol is enabled in AAD mode (IKEv2 not supported with AAD today).
+* Address pool (`vpn_p2s_address_space`) must not overlap with on-prem or VNet ranges.
+* Revoke access by disabling user accounts or removing the client app assignment.
+* Rotate scope or audience by updating variables and reapplying Terraform.
+
+### Future Enhancements (Roadmap)
+* Conditional simultaneous support for AAD + certificate (dual-mode) if a future requirement emerges.
+* Automated admin consent (not directly supported by Terraform at present).
+* Azure AD groups-based scoped access (assigning app roles / groups).
+
+---
 
 ## 🤝 Contributing
 

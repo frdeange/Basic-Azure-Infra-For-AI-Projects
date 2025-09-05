@@ -1,31 +1,29 @@
-# 10-remote-access.tf – Bastion, JumpBox, (optional) VPN Gateway
+#############################################
+# 13-remote-access.tf – Bastion, JumpBox (was part of 10-remote-access.tf)
+#############################################
 
-# TLS key generation if no key provided
 resource "tls_private_key" "jumpbox" {
-  count      = var.enable_jumpbox && var.jumpbox_ssh_public_key == "" ? 1 : 0
-  algorithm  = "RSA"
-  rsa_bits   = 4096
+  count     = var.enable_jumpbox && var.jumpbox_ssh_public_key == "" ? 1 : 0
+  algorithm = "RSA"
+  rsa_bits  = 4096
 }
 
-# JumpBox public key to use
 locals {
   jumpbox_public_key = var.jumpbox_ssh_public_key != "" ? var.jumpbox_ssh_public_key : (var.enable_jumpbox ? tls_private_key.jumpbox[0].public_key_openssh : "")
 }
 
-# Bastion Public IP
 resource "azurerm_public_ip" "bastion" {
   count               = var.enable_bastion ? 1 : 0
-  name                = "${var.ai_prefix}-bastion-pip"
+  name                = "${var.ai_prefix}-bastion-pip${local.global_suffix_append}"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   allocation_method   = "Static"
   sku                 = "Standard"
 }
 
-# Bastion Host
 resource "azurerm_bastion_host" "main" {
   count               = var.enable_bastion ? 1 : 0
-  name                = "${var.ai_prefix}-bastion"
+  name                = "${var.ai_prefix}-bastion${local.global_suffix_append}"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   sku                 = "Standard"
@@ -37,10 +35,9 @@ resource "azurerm_bastion_host" "main" {
   }
 }
 
-# NSG for JumpBox (allow SSH only from Bastion subnet)
 resource "azurerm_network_security_group" "jumpbox" {
   count               = var.enable_jumpbox ? 1 : 0
-  name                = "${var.ai_prefix}-jump-nsg"
+  name                = "${var.ai_prefix}-jump-nsg${local.global_suffix_append}"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
 
@@ -81,7 +78,7 @@ resource "azurerm_network_security_group" "jumpbox" {
 
 resource "azurerm_network_interface" "jumpbox" {
   count               = var.enable_jumpbox ? 1 : 0
-  name                = "${var.ai_prefix}-jump-nic"
+  name                = "${var.ai_prefix}-jump-nic${local.global_suffix_append}"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
 
@@ -99,14 +96,14 @@ resource "azurerm_network_interface_security_group_association" "jumpbox" {
 }
 
 resource "azurerm_linux_virtual_machine" "jumpbox" {
-  count                 = var.enable_jumpbox ? 1 : 0
-  name                  = "${var.ai_prefix}-jumpbox"
-  location              = azurerm_resource_group.main.location
-  resource_group_name   = azurerm_resource_group.main.name
-  size                  = "Standard_B2s"
-  admin_username        = var.jumpbox_admin_username
+  count                           = var.enable_jumpbox ? 1 : 0
+  name                            = "${var.ai_prefix}-jumpbox${local.global_suffix_append}"
+  location                        = azurerm_resource_group.main.location
+  resource_group_name             = azurerm_resource_group.main.name
+  size                            = "Standard_B2s"
+  admin_username                  = var.jumpbox_admin_username
   disable_password_authentication = true
-  network_interface_ids = [azurerm_network_interface.jumpbox[0].id]
+  network_interface_ids           = [azurerm_network_interface.jumpbox[0].id]
 
   admin_ssh_key {
     username   = var.jumpbox_admin_username
@@ -114,7 +111,7 @@ resource "azurerm_linux_virtual_machine" "jumpbox" {
   }
 
   os_disk {
-    name                 = "${var.ai_prefix}-jump-osdisk"
+    name                 = "${var.ai_prefix}-jump-osdisk${local.global_suffix_append}"
     caching              = "ReadWrite"
     storage_account_type = "Standard_LRS"
   }
@@ -126,44 +123,3 @@ resource "azurerm_linux_virtual_machine" "jumpbox" {
     version   = "latest"
   }
 }
-
-# VPN Gateway (conditional skeleton)
-resource "azurerm_public_ip" "vpngw" {
-  count               = var.enable_vpn_gateway ? 1 : 0
-  name                = "${var.ai_prefix}-vpngw-pip"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  allocation_method   = "Dynamic"
-  sku                 = "Standard"
-}
-
-resource "azurerm_virtual_network_gateway" "p2s" {
-  count               = var.enable_vpn_gateway ? 1 : 0
-  name                = "${var.ai_prefix}-vpngw"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  type                = "Vpn"
-  vpn_type            = "RouteBased"
-  active_active       = false
-  enable_bgp          = false
-  sku                 = "VpnGw1"
-
-  ip_configuration {
-    name                          = "vpngw"
-    public_ip_address_id          = azurerm_public_ip.vpngw[0].id
-    private_ip_address_allocation = "Dynamic"
-    subnet_id                     = azurerm_subnet.gateway[0].id
-  }
-
-  vpn_client_configuration {
-    address_space = var.vpn_p2s_address_space
-    dynamic "root_certificate" {
-      for_each = var.vpn_root_cert_data != "" ? [1] : []
-      content {
-        name             = var.vpn_root_cert_name
-        public_cert_data = var.vpn_root_cert_data
-      }
-    }
-  }
-}
-# Outputs for remote access will be added in outputs.tf

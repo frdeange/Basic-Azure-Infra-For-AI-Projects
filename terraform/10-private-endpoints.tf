@@ -1,13 +1,9 @@
-# 07-private-endpoints.tf – Private Connectivity
-
-# Private Endpoints (+ Private DNS Zone Groups)
-
-# Redis Cache
+#############################################
+# 10-private-endpoints.tf – Private Endpoints (was 07-private-endpoints.tf)
 #############################################
 
-# Storage: Blob
 resource "azurerm_private_endpoint" "pe_storage_blob" {
-  name                = "${var.ai_prefix}-pe-blob"
+  name                = "${local.base_prefix}-pe-blob"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   subnet_id           = azurerm_subnet.privatelink.id
@@ -25,9 +21,8 @@ resource "azurerm_private_endpoint" "pe_storage_blob" {
   }
 }
 
-# Storage: File
 resource "azurerm_private_endpoint" "pe_storage_file" {
-  name                = "${var.ai_prefix}-pe-file"
+  name                = "${local.base_prefix}-pe-file"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   subnet_id           = azurerm_subnet.privatelink.id
@@ -45,9 +40,8 @@ resource "azurerm_private_endpoint" "pe_storage_file" {
   }
 }
 
-# Key Vault
 resource "azurerm_private_endpoint" "pe_kv" {
-  name                = "${var.ai_prefix}-pe-kv"
+  name                = "${local.base_prefix}-pe-kv"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   subnet_id           = azurerm_subnet.privatelink.id
@@ -65,9 +59,8 @@ resource "azurerm_private_endpoint" "pe_kv" {
   }
 }
 
-# Cosmos DB (SQL)
 resource "azurerm_private_endpoint" "pe_cosmos" {
-  name                = "${var.ai_prefix}-pe-cosmos"
+  name                = "${local.base_prefix}-pe-cosmos"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   subnet_id           = azurerm_subnet.privatelink.id
@@ -85,9 +78,8 @@ resource "azurerm_private_endpoint" "pe_cosmos" {
   }
 }
 
-# Azure AI Search
 resource "azurerm_private_endpoint" "pe_search" {
-  name                = "${var.ai_prefix}-pe-search"
+  name                = "${local.base_prefix}-pe-search"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   subnet_id           = azurerm_subnet.privatelink.id
@@ -105,9 +97,9 @@ resource "azurerm_private_endpoint" "pe_search" {
   }
 }
 
-# Azure AI Services (Cognitive/Hub)
 resource "azurerm_private_endpoint" "pe_cognitive" {
-  name                = "${var.ai_prefix}-pe-cognitive"
+  depends_on = [azurerm_ai_services.main]
+  name                = "${local.base_prefix}-pe-cognitive"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   subnet_id           = azurerm_subnet.privatelink.id
@@ -125,9 +117,8 @@ resource "azurerm_private_endpoint" "pe_cognitive" {
   }
 }
 
-# Azure AI Foundry (AML workspace subresource)
 resource "azurerm_private_endpoint" "pe_foundry" {
-  name                = "${var.ai_prefix}-pe-foundry"
+  name                = "${local.base_prefix}-pe-foundry"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   subnet_id           = azurerm_subnet.privatelink.id
@@ -145,9 +136,8 @@ resource "azurerm_private_endpoint" "pe_foundry" {
   }
 }
 
-# Private Endpoint for inbound to Web App
 resource "azurerm_private_endpoint" "pe_web" {
-  name                = "${var.ai_prefix}-pe-web"
+  name                = "${local.base_prefix}-pe-web"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   subnet_id           = azurerm_subnet.privatelink.id
@@ -163,4 +153,23 @@ resource "azurerm_private_endpoint" "pe_web" {
     name                 = "dg-web"
     private_dns_zone_ids = [azurerm_private_dns_zone.zones["privatelink.azurewebsites.net"].id]
   }
+}
+
+# Managed Redis Private Endpoint (preview) – may require feature registration.
+resource "azurerm_private_endpoint" "pe_managed_redis" {
+  count               = var.enable_managed_redis && var.enable_managed_redis_private_endpoint ? 1 : 0
+  name                = "${local.base_prefix}-pe-redis"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  subnet_id           = try(azurerm_subnet.redis[0].id, azurerm_subnet.privatelink.id)
+
+  private_service_connection {
+    name                           = "redis"
+    private_connection_resource_id = azapi_resource.managed_redis[0].id
+    subresource_names              = ["redisEnterprise"]
+    is_manual_connection           = false
+  }
+
+  # DNS zone currently reused (if available). Managed Redis may need dedicated zone when GA.
+  # Skipping DNS zone group until official privatelink zone is published.
 }
