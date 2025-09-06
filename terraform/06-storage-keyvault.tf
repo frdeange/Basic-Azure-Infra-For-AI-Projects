@@ -39,7 +39,7 @@ resource "azurerm_key_vault" "main" {
   # Secure by default; optionally relaxed during first certificate provisioning if kv_certificate_bootstrap = true
   # Public network only enabled during bootstrap phase; hardened phase disables it
   public_network_access_enabled  = var.kv_certificate_bootstrap ? true : false
-  rbac_authorization_enabled     = true
+  # rbac_authorization_enabled     = true
   # Only enable for template deployment during bootstrap to satisfy certificate creation then disable when hardened
   # Keep enabled for template deployment so Terraform can manage certificate resource during hardening
   enabled_for_template_deployment = true

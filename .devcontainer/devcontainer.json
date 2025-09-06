@@ -19,7 +19,7 @@
 		   }
 	   },
 	   "forwardPorts": [],
-	   "postCreateCommand": "apt-get update && apt-get install -y jq",
+	   "postCreateCommand": "sudo apt-get update && sudo apt-get install -y jq",
 	   "containerEnv": {
 		   "TF_IN_AUTOMATION": "true"
 	   }
